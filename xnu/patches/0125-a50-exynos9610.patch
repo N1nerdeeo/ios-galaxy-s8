@@ -1,0 +1,54 @@
+diff --git pexpert/pexpert/arm64/A5XELTE.h pexpert/pexpert/arm64/A5XELTE.h
+--- a/pexpert/pexpert/arm64/A5XELTE.h
++++ b/pexpert/pexpert/arm64/A5XELTE.h
+@@ -31,16 +31,16 @@
+  */
+ #define DREAMLTE                      1
+ #if defined(DREAMLTE)
+-#define A5_FB_PHYS                    0xcc000000  /* s3cfb.bootloaderfb */
+-#define A5_FB_WIDTH                   1440
+-#define A5_FB_HEIGHT                  2960
+-#define A5_FB_STRIDE                  5760        /* bytes per row */
+-#define A5_FB_2M_BLOCKS               9           /* 1440*2960*4 bytes */
+-#define A5_ENTRY_MARKER_PHYS          0x920ff000  /* slot in the loader's pstore text */
+-#define A5_BOOT_MPIDR                 0x100       /* first Cortex-A53 */
+-#define A5_KEYS_DEFAULT               1           /* S8 keys: GPA0/GPA2 */
++#define A5_FB_PHYS                    0xca000000  /* s3cfb.bootloaderfb */
++#define A5_FB_WIDTH                   1080
++#define A5_FB_HEIGHT                  2340
++#define A5_FB_STRIDE                  4320        /* bytes per row */
++#define A5_FB_2M_BLOCKS               6           /* 1080*2340*4 bytes */
++#define A5_ENTRY_MARKER_PHYS          0x89f000000  /* slot in the loader's pstore text */
++#define A5_BOOT_MPIDR                 0x0         /* first Cortex-A53 */
++#define A5_KEYS_DEFAULT               0           /* S8 keys: disabled for A50 bringup */
+ #define A5_TOUCH_DEFAULT              0           /* A5 ZT7538 path absent */
+-#define A5_KLOG_PHYS                  0x92180000  /* TWRP ramoops pmsg zone */
++#define A5_KLOG_PHYS                  0xf9e90000  /* TWRP ramoops pmsg zone */
+ #define A5_KLOG_SIZE                  0x80000
+ /* Samsung's S8 kernel DT: arch timer "use-physical-timer". The EL1
+  * virtual timer is not usable on the secondary cores (boot 22/24: 4
+diff --git iokit/Kernel/arm/SweetFramebuffer.cpp iokit/Kernel/arm/SweetFramebuffer.cpp
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -328,7 +328,7 @@
+ sweet_fb_wait_frame_done(void)
+ {
+ 	if (sweet_fb_decon == 0) {
+-		sweet_fb_decon = ml_io_map(0x12860000, 0x1000);
++		sweet_fb_decon = ml_io_map(0x148B0000, 0x1000);
+ 		if (sweet_fb_decon == 0) {
+ 			return;
+ 		}
+diff --git bsd/dev/a5xelte_touch.c bsd/dev/a5xelte_touch.c
+--- a/bsd/dev/a5xelte_touch.c
++++ b/bsd/dev/a5xelte_touch.c
+@@ -412,7 +412,8 @@
+ a5xelte_touch_probe(void)
+ {
+ #if defined(DREAMLTE)
+-	dreamlte_touch_start();   /* the A5 path below stays off */
++	// dreamlte_touch_start();   /* the A5 path below stays off */
++	(void)dreamlte_touch_start;
+ #endif
+ 	int enabled = A5_TOUCH_DEFAULT; /* A5 touch: off on the S8 */
+ 	int log_contacts = 0;
