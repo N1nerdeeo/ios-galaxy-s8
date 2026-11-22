@@ -27,9 +27,36 @@ diff --git pexpert/pexpert/arm64/A5XELTE.h pexpert/pexpert/arm64/A5XELTE.h
  #define A5_KLOG_SIZE                  0x80000
  /* Samsung's S8 kernel DT: arch timer "use-physical-timer". The EL1
   * virtual timer is not usable on the secondary cores (boot 22/24: 4
+diff --git pexpert/arm/pe_serial.c pexpert/arm/pe_serial.c
+--- a/pexpert/arm/pe_serial.c
++++ b/pexpert/arm/pe_serial.c
+@@ -813,6 +813,7 @@ fbcon_transmit_ready(void)
+ 	return 1;
+ }
+ 
++extern int sweet_console_muted;
+ static void
+ fbcon_transmit_data(uint8_t c)
+ {
+@@ -820,6 +821,9 @@ fbcon_transmit_data(uint8_t c)
+ #if defined(DREAMLTE)
+ 	klog_putc(c);
+ #endif
++	if (sweet_console_muted) {
++		return;
++	}
+ 	if (c == '\r') {
+ 		fbcon_col = 0;
+ 		return;
 diff --git iokit/Kernel/arm/SweetFramebuffer.cpp iokit/Kernel/arm/SweetFramebuffer.cpp
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -48,6 +48,7 @@
+ extern "C" int sweet_console_muted;     /* osfmk/console/serial_console.c */
++extern "C" void kprintf(const char *fmt, ...);
+ #include <IOKit/IOTimerEventSource.h>
+ #include <IOKit/system.h>
+ #include <pexpert/pexpert.h>
 @@ -328,7 +328,7 @@
  sweet_fb_wait_frame_done(void)
  {
@@ -39,6 +66,24 @@ diff --git iokit/Kernel/arm/SweetFramebuffer.cpp iokit/Kernel/arm/SweetFramebuff
  		if (sweet_fb_decon == 0) {
  			return;
  		}
+@@ -387,7 +387,13 @@
+ 	if (!fConsolePaused) {
+ 		int quiet = 0;
+ 		fConsolePaused = true;
++		kprintf("SWEET FB: AppleCLCD::present first frame phys=0x%llx %ux%u stride=%u\n",
++		    (unsigned long long)fPhys, fWidth, fHeight, fRowBytes);
+ #if defined(ARM64_BOARD_CONFIG_A5XELTE)
+-		if (PE_parse_boot_argn("a5fb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) {
++		if ((PE_parse_boot_argn("a5fb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) ||
++		    (PE_parse_boot_argn("sweetfb_noconsole", &quiet, sizeof(quiet)) && quiet != 0)) {
+ #else
+ 		if (PE_parse_boot_argn("sweetfb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) {
+ #endif
+ 			/* Not PE_initialize_console(kPEDisableScreen): its console switch
+ 			 * writes the read-only-late cons_ops_index and panics. */
+ 			sweet_console_muted = 1;
+ 		}
+ 	}
 diff --git iokit/Kernel/arm/SweetCPU.cpp iokit/Kernel/arm/SweetCPU.cpp
 --- a/iokit/Kernel/arm/SweetCPU.cpp
 +++ b/iokit/Kernel/arm/SweetCPU.cpp
