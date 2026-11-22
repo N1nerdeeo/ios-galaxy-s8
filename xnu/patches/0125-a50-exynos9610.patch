@@ -396,17 +396,14 @@ index b1094e9..751cf79 100644
  	setProperty("SurfaceHeight", (unsigned long long)(151 << 16), 32);
  #endif
 diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
-index 31b62ee..e97d8d5 100644
+index 1966bdd..53fdc73 100644
 --- a/pexpert/arm/pe_serial.c
 +++ b/pexpert/arm/pe_serial.c
-@@ -814,12 +814,16 @@ fbcon_transmit_ready(void)
- 	return 1;
- }
- 
-+extern int sweet_console_muted;
+@@ -814,9 +814,13 @@ fbcon_transmit_ready(void)
  static void
  fbcon_transmit_data(uint8_t c)
  {
++	extern int sweet_console_muted;
  #if defined(DREAMLTE)
  	klog_putc(c);
  #endif
@@ -417,7 +414,7 @@ index 31b62ee..e97d8d5 100644
  		fbcon_col = 0;
  		return;
 diff --git a/pexpert/pexpert/arm64/A5XELTE.h b/pexpert/pexpert/arm64/A5XELTE.h
-index c58e085..9eda0f5 100644
+index b6f812d..dc7de8e 100644
 --- a/pexpert/pexpert/arm64/A5XELTE.h
 +++ b/pexpert/pexpert/arm64/A5XELTE.h
 @@ -31,16 +31,16 @@
@@ -430,7 +427,7 @@ index c58e085..9eda0f5 100644
 -#define A5_FB_STRIDE                  5760        /* bytes per row */
 -#define A5_FB_2M_BLOCKS               9           /* 1440*2960*4 bytes */
 -#define A5_ENTRY_MARKER_PHYS          0x920ff000  /* slot in the loader's pstore text */
--#define A5_BOOT_MPIDR                 0x100        /* first Cortex-A53 */
+-#define A5_BOOT_MPIDR                 0x100       /* first Cortex-A53 */
 +#define A5_FB_PHYS                    0xca000000  /* s3cfb.bootloaderfb */
 +#define A5_FB_WIDTH                   1080
 +#define A5_FB_HEIGHT                  2340
@@ -438,7 +435,7 @@ index c58e085..9eda0f5 100644
 +#define A5_FB_2M_BLOCKS               6           /* 1080*2340*4 bytes */
 +#define A5_ENTRY_MARKER_PHYS          0x89f000000  /* slot in the loader's pstore text */
 +#define A5_BOOT_MPIDR                 0x0         /* first Cortex-A53 */
- #define A5_KEYS_DEFAULT               1           /* S8 keys: disabled for A50 bringup */
+ #define A5_KEYS_DEFAULT               1           /* S8 keys: GPA0/GPA2 */
  #define A5_TOUCH_DEFAULT              0           /* A5 ZT7538 path absent */
 -#define A5_KLOG_PHYS                  0x92180000  /* TWRP ramoops pmsg zone */
 +#define A5_KLOG_PHYS                  0xf9e90000  /* TWRP ramoops pmsg zone */
