@@ -374,7 +374,7 @@ index ba647a8..3166478 100644
  	int enabled = A5_TOUCH_DEFAULT; /* A5 touch: off on the S8 */
  	int log_contacts = 0;
 diff --git a/iokit/Kernel/arm/SweetCPU.cpp b/iokit/Kernel/arm/SweetCPU.cpp
-index 5bd24a7..38a5ecb 100644
+index 5bd24a7..5c7d72f 100644
 --- a/iokit/Kernel/arm/SweetCPU.cpp
 +++ b/iokit/Kernel/arm/SweetCPU.cpp
 @@ -87,17 +87,10 @@ SweetCPU::start(IOService *provider)
@@ -396,6 +396,15 @@ index 5bd24a7..38a5ecb 100644
  		panic(CPU_PORT_NAME " CPU: unsupported topology cpu=%u mpidr=0x%x count=%u",
  		    cpu->cpu_id, cpu->phys_id, topology->num_cpus);
  	}
+@@ -320,7 +313,7 @@ SweetCPU::startCPU(vm_offset_t start_paddr, vm_offset_t arg_paddr)
+ 		entry = (vm_offset_t)tramp_pa;
+ 		static vm_offset_t pmu;
+ 		if (pmu == 0) {
+-			pmu = ml_io_map(0x16480000, 0x10000);
++			pmu = ml_io_map(0x11860000, 0x10000);
+ 		}
+ 		uint32_t off = 0x2000 + (uint32_t)(((((cpu->phys_id >> 8) & 0xf) << 2) |
+ 		    (cpu->phys_id & 0xf)) * 0x80);
 diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
 index ec6b9da..46e1a1c 100644
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
