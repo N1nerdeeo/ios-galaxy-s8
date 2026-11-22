@@ -51,13 +51,13 @@ diff --git pexpert/arm/pe_serial.c pexpert/arm/pe_serial.c
 diff --git iokit/Kernel/arm/SweetFramebuffer.cpp iokit/Kernel/arm/SweetFramebuffer.cpp
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -48,6 +48,7 @@
+@@ -48,4 +48,5 @@
  extern "C" int sweet_console_muted;     /* osfmk/console/serial_console.c */
 +extern "C" void kprintf(const char *fmt, ...);
  #include <IOKit/IOTimerEventSource.h>
  #include <IOKit/system.h>
  #include <pexpert/pexpert.h>
-@@ -328,7 +328,7 @@
+@@ -328,7 +329,7 @@
  sweet_fb_wait_frame_done(void)
  {
  	if (sweet_fb_decon == 0) {
@@ -66,7 +66,7 @@ diff --git iokit/Kernel/arm/SweetFramebuffer.cpp iokit/Kernel/arm/SweetFramebuff
  		if (sweet_fb_decon == 0) {
  			return;
  		}
-@@ -387,7 +387,13 @@
+@@ -387,13 +388,16 @@
  	if (!fConsolePaused) {
  		int quiet = 0;
  		fConsolePaused = true;
