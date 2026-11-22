@@ -39,6 +39,28 @@ diff --git iokit/Kernel/arm/SweetFramebuffer.cpp iokit/Kernel/arm/SweetFramebuff
  		if (sweet_fb_decon == 0) {
  			return;
  		}
+diff --git iokit/Kernel/arm/SweetCPU.cpp iokit/Kernel/arm/SweetCPU.cpp
+--- a/iokit/Kernel/arm/SweetCPU.cpp
++++ b/iokit/Kernel/arm/SweetCPU.cpp
+@@ -87,17 +87,10 @@ SweetCPU::start(IOService *provider)
+ #if defined(A5XELTE)
+ 	/* Linux's Exynos7580 DT: logical 0..3 = MPIDR 0..3;
+ 	 * logical 4..7 = MPIDR 0x100..0x103. */
+-#if defined(DREAMLTE)
+-	/* Exynos 8895: logical 0..3 = A53 MPIDR 0x100..0x103 (boot cluster);
+-	 * logical 4..7 = Mongoose M2 MPIDR 0..3. */
+-	uint32_t expected_mpidr = cpu->cpu_id < 4 ? 0x100U + cpu->cpu_id :
+-	    cpu->cpu_id - 4;
+-#else
+ 	uint32_t expected_mpidr = cpu->cpu_id < 4 ? cpu->cpu_id :
+ 	    0x100U + cpu->cpu_id - 4;
+-#endif
+ 	if (cpu->phys_id != expected_mpidr ||
+-	    topology->num_cpus > SWEET_SMP_MAX_CPUS) {
++	    topology->num_cpus < 1 || topology->num_cpus > SWEET_SMP_MAX_CPUS) {
+ 		panic(CPU_PORT_NAME " CPU: unsupported topology cpu=%u mpidr=0x%x count=%u",
+ 		    cpu->cpu_id, cpu->phys_id, topology->num_cpus);
+ 	}
 diff --git bsd/dev/a5xelte_touch.c bsd/dev/a5xelte_touch.c
 --- a/bsd/dev/a5xelte_touch.c
 +++ b/bsd/dev/a5xelte_touch.c
