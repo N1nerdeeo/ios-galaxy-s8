@@ -34,7 +34,7 @@ index dcbd143..04d3dbe 100644
  typedef uint8_t keys_t;
  #define KEYS_SAMPLE() ((keys_t)a5_keys_read(A5_GPA2_DAT))
 diff --git a/bsd/dev/a5xelte_touch.c b/bsd/dev/a5xelte_touch.c
-index ba647a8..74a6c49 100644
+index ba647a8..3166478 100644
 --- a/bsd/dev/a5xelte_touch.c
 +++ b/bsd/dev/a5xelte_touch.c
 @@ -851,6 +851,8 @@ int
@@ -46,7 +46,7 @@ index ba647a8..74a6c49 100644
  	uint16_t soc, vcell, cur;
  	uint8_t reg, ok = 0, dtls = 0;
  	if (!s8bat_i2c) {
-@@ -920,11 +922,266 @@ dreamlte_touch_start(void)
+@@ -920,11 +922,325 @@ dreamlte_touch_start(void)
  }
  #endif /* DREAMLTE */
  
@@ -62,9 +62,10 @@ index ba647a8..74a6c49 100644
 + */
 +#define A50_TOUCH_I2C_PA      0x13870000u
 +#define A50_TOUCH_ALIVE_PA    0x11850000u
++#define A50_TOUCH_TOP_PA      0x139b0000u
 +#define A50_TOUCH_ADDR        0x48u
 +
-+static vm_offset_t a50_ts_i2c, a50_ts_alive;
++static vm_offset_t a50_ts_i2c, a50_ts_alive, a50_ts_top;
 +static int a50_ts_sleep;
 +static bool a50_ts_down[5];
 +static int a50_ts_x[5], a50_ts_y[5];
@@ -279,20 +280,78 @@ index ba647a8..74a6c49 100644
 +
 +	a50_ts_i2c = ml_io_map(A50_TOUCH_I2C_PA, 0x1000);
 +	a50_ts_alive = ml_io_map(A50_TOUCH_ALIVE_PA, 0x1000);
-+	if (!a50_ts_i2c || !a50_ts_alive) {
-+		printf("A50 TOUCH: MMIO mapping failed (i2c=%p alive=%p)\n",
-+		    (void *)a50_ts_i2c, (void *)a50_ts_alive);
++	a50_ts_top = ml_io_map(A50_TOUCH_TOP_PA, 0x1000);
++	if (!a50_ts_i2c || !a50_ts_alive || !a50_ts_top) {
++		printf("A50 TOUCH: MMIO mapping failed (i2c=%p alive=%p top=%p)\n",
++		    (void *)a50_ts_i2c, (void *)a50_ts_alive, (void *)a50_ts_top);
 +		return;
 +	}
 +
-+	/* Probe check: read IC ID (0x01, 0x70) */
-+	uint8_t cmd[2] = { 0x01, 0x70 };
-+	uint8_t id_buf[4] = { 0 };
-+	if (a50_s3c_xfer(a50_ts_i2c, A50_TOUCH_ADDR, cmd, 2, id_buf, 2)) {
-+		printf("A50 TOUCH: MELFAS MSS100 detected (id %02x %02x)\n",
-+		    id_buf[0], id_buf[1]);
++	/* 1. Configure I2C4 pins in pinctrl_top:
++	 * GPP1_CON (+0x020): gpp1-0 (SDA, bits 0..3) & gpp1-1 (SCL, bits 4..7) -> function 0x2
++	 * GPP1_PUD (+0x028): no pull (bits 0..3 = 0)
++	 */
++	uint32_t gpp1_con = a5touch_read(a50_ts_top, 0x020);
++	gpp1_con = (gpp1_con & ~0xffu) | 0x22u;
++	a5touch_write(a50_ts_top, 0x020, gpp1_con);
++
++	uint32_t gpp1_pud = a5touch_read(a50_ts_top, 0x028);
++	gpp1_pud &= ~0x0fu;
++	a5touch_write(a50_ts_top, 0x028, gpp1_pud);
++
++	/* 2. Configure tsp_ldo_en power rail (3.0V) in pinctrl_top:
++	 * GPG3_CON (+0x120): pin 1 -> bits 4..7 = 0x1 (Output)
++	 * GPG3_PUD (+0x128): pin 1 -> bits 2..3 = 0x0 (no pull)
++	 * GPG3_DAT (+0x124): pin 1 -> bit 1 = 1 (HIGH)
++	 */
++	uint32_t gpg3_con = a5touch_read(a50_ts_top, 0x120);
++	gpg3_con = (gpg3_con & ~(0xfu << 4)) | (0x1u << 4);
++	a5touch_write(a50_ts_top, 0x120, gpg3_con);
++
++	uint32_t gpg3_pud = a5touch_read(a50_ts_top, 0x128);
++	gpg3_pud &= ~(0x3u << 2);
++	a5touch_write(a50_ts_top, 0x128, gpg3_pud);
++
++	uint32_t gpg3_dat = a5touch_read(a50_ts_top, 0x124);
++	gpg3_dat |= (1u << 1);
++	a5touch_write(a50_ts_top, 0x124, gpg3_dat);
++
++	/* 3. Configure ATTN pin GPA0_0 in pinctrl_alive:
++	 * GPA0_CON (+0x020): pin 0 -> bits 0..3 = 0x0 (Input mode)
++	 * GPA0_PUD (+0x028): pin 0 -> bits 0..1 = 0x0 (no pull)
++	 */
++	uint32_t gpa0_con = a5touch_read(a50_ts_alive, 0x020);
++	gpa0_con &= ~0xfu;
++	a5touch_write(a50_ts_alive, 0x020, gpa0_con);
++
++	uint32_t gpa0_pud = a5touch_read(a50_ts_alive, 0x028);
++	gpa0_pud &= ~0x3u;
++	a5touch_write(a50_ts_alive, 0x028, gpa0_pud);
++
++	/* Wait 200 ms for MELFAS MSS100 power-on reset */
++	a50_ts_wait(200);
++
++	/* Read back pin state for verification */
++	uint32_t r_gpp1 = a5touch_read(a50_ts_top, 0x020);
++	uint32_t r_gpg3 = a5touch_read(a50_ts_top, 0x124);
++	uint32_t r_gpa0 = a5touch_read(a50_ts_alive, 0x024);
++	printf("A50 TOUCH: power on, GPP1_CON=0x%x GPG3_DAT=0x%x GPA0_DAT=0x%x\n",
++	    r_gpp1, r_gpg3, r_gpa0);
++
++	/* Probe check: query MIP4 info (0x02, 0x10) or chip ID (0x01, 0x70) */
++	uint8_t cmd_info[2] = { 0x02, 0x10 };
++	uint8_t info_buf = 0;
++	if (a50_s3c_xfer(a50_ts_i2c, A50_TOUCH_ADDR, cmd_info, 2, &info_buf, 1)) {
++		printf("A50 TOUCH: MELFAS MSS100 ready (info 0x%02x)\n", info_buf);
 +	} else {
-+		printf("A50 TOUCH: MELFAS MSS100 probe xfer unconfirmed, starting worker anyway\n");
++		uint8_t cmd_id[2] = { 0x01, 0x70 };
++		uint8_t id_buf[4] = { 0 };
++		if (a50_s3c_xfer(a50_ts_i2c, A50_TOUCH_ADDR, cmd_id, 2, id_buf, 2)) {
++			printf("A50 TOUCH: MELFAS MSS100 detected (id %02x %02x)\n",
++			    id_buf[0], id_buf[1]);
++		} else {
++			printf("A50 TOUCH: MELFAS MSS100 probe xfer unconfirmed, starting worker anyway\n");
++		}
 +	}
 +
 +	thread_t thread;
