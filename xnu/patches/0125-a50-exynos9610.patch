@@ -1,4 +1,95 @@
-diff --git pexpert/pexpert/arm64/A5XELTE.h pexpert/pexpert/arm64/A5XELTE.h
+diff --git a/bsd/dev/a5xelte_touch.c b/bsd/dev/a5xelte_touch.c
+index ba647a8..fff1aca 100644
+--- a/bsd/dev/a5xelte_touch.c
++++ b/bsd/dev/a5xelte_touch.c
+@@ -851,6 +851,8 @@ int
+ dreamlte_battery_read(unsigned *percent, unsigned *mv, int *ma,
+     int *external, int *charging, int *full)
+ {
++	(void)percent; (void)mv; (void)ma; (void)external; (void)charging; (void)full;
++	return -1;
+ 	uint16_t soc, vcell, cur;
+ 	uint8_t reg, ok = 0, dtls = 0;
+ 	if (!s8bat_i2c) {
+@@ -924,7 +926,8 @@ void
+ a5xelte_touch_probe(void)
+ {
+ #if defined(DREAMLTE)
+-	dreamlte_touch_start();   /* the A5 path below stays off */
++	// dreamlte_touch_start();   /* the A5 path below stays off */
++	(void)dreamlte_touch_start;
+ #endif
+ 	int enabled = A5_TOUCH_DEFAULT; /* A5 touch: off on the S8 */
+ 	int log_contacts = 0;
+diff --git a/iokit/Kernel/arm/SweetCPU.cpp b/iokit/Kernel/arm/SweetCPU.cpp
+index 5bd24a7..38a5ecb 100644
+--- a/iokit/Kernel/arm/SweetCPU.cpp
++++ b/iokit/Kernel/arm/SweetCPU.cpp
+@@ -87,17 +87,10 @@ SweetCPU::start(IOService *provider)
+ #if defined(A5XELTE)
+ 	/* Linux's Exynos7580 DT: logical 0..3 = MPIDR 0..3;
+ 	 * logical 4..7 = MPIDR 0x100..0x103. */
+-#if defined(DREAMLTE)
+-	/* Exynos 8895: logical 0..3 = A53 MPIDR 0x100..0x103 (boot cluster);
+-	 * logical 4..7 = Mongoose M2 MPIDR 0..3. */
+-	uint32_t expected_mpidr = cpu->cpu_id < 4 ? 0x100U + cpu->cpu_id :
+-	    cpu->cpu_id - 4;
+-#else
+ 	uint32_t expected_mpidr = cpu->cpu_id < 4 ? cpu->cpu_id :
+ 	    0x100U + cpu->cpu_id - 4;
+-#endif
+ 	if (cpu->phys_id != expected_mpidr ||
+-	    topology->num_cpus > SWEET_SMP_MAX_CPUS) {
++	    topology->num_cpus < 1 || topology->num_cpus > SWEET_SMP_MAX_CPUS) {
+ 		panic(CPU_PORT_NAME " CPU: unsupported topology cpu=%u mpidr=0x%x count=%u",
+ 		    cpu->cpu_id, cpu->phys_id, topology->num_cpus);
+ 	}
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index ec6b9da..15049ac 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -332,7 +332,7 @@ static void
+ sweet_fb_wait_frame_done(void)
+ {
+ 	if (sweet_fb_decon == 0) {
+-		sweet_fb_decon = ml_io_map(0x12860000, 0x1000);
++		sweet_fb_decon = ml_io_map(0x148B0000, 0x1000);
+ 		if (sweet_fb_decon == 0) {
+ 			return;
+ 		}
+@@ -390,8 +390,11 @@ AppleCLCD::present(const uint8_t *rec)
+ 	if (!fConsolePaused) {
+ 		int quiet = 0;
+ 		fConsolePaused = true;
++		kprintf("SWEET FB: AppleCLCD::present first frame phys=0x%llx %ux%u stride=%u\n",
++		    (unsigned long long)fPhys, fWidth, fHeight, fRowBytes);
+ #if defined(ARM64_BOARD_CONFIG_A5XELTE)
+-		if (PE_parse_boot_argn("a5fb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) {
++		if ((PE_parse_boot_argn("a5fb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) ||
++		    (PE_parse_boot_argn("sweetfb_noconsole", &quiet, sizeof(quiet)) && quiet != 0)) {
+ #else
+ 		if (PE_parse_boot_argn("sweetfb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) {
+ #endif
+diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
+index 1966bdd..53fdc73 100644
+--- a/pexpert/arm/pe_serial.c
++++ b/pexpert/arm/pe_serial.c
+@@ -814,9 +814,13 @@ fbcon_transmit_ready(void)
+ static void
+ fbcon_transmit_data(uint8_t c)
+ {
++	extern int sweet_console_muted;
+ #if defined(DREAMLTE)
+ 	klog_putc(c);
+ #endif
++	if (sweet_console_muted) {
++		return;
++	}
+ 	if (c == '\r') {
+ 		fbcon_col = 0;
+ 		return;
+diff --git a/pexpert/pexpert/arm64/A5XELTE.h b/pexpert/pexpert/arm64/A5XELTE.h
+index b6f812d..6b1f9d0 100644
 --- a/pexpert/pexpert/arm64/A5XELTE.h
 +++ b/pexpert/pexpert/arm64/A5XELTE.h
 @@ -31,16 +31,16 @@
@@ -27,106 +118,3 @@ diff --git pexpert/pexpert/arm64/A5XELTE.h pexpert/pexpert/arm64/A5XELTE.h
  #define A5_KLOG_SIZE                  0x80000
  /* Samsung's S8 kernel DT: arch timer "use-physical-timer". The EL1
   * virtual timer is not usable on the secondary cores (boot 22/24: 4
-diff --git pexpert/arm/pe_serial.c pexpert/arm/pe_serial.c
---- a/pexpert/arm/pe_serial.c
-+++ b/pexpert/arm/pe_serial.c
-@@ -813,6 +813,7 @@ fbcon_transmit_ready(void)
- 	return 1;
- }
- 
-+extern int sweet_console_muted;
- static void
- fbcon_transmit_data(uint8_t c)
- {
-@@ -820,6 +821,9 @@ fbcon_transmit_data(uint8_t c)
- #if defined(DREAMLTE)
- 	klog_putc(c);
- #endif
-+	if (sweet_console_muted) {
-+		return;
-+	}
- 	if (c == '\r') {
- 		fbcon_col = 0;
- 		return;
-diff --git iokit/Kernel/arm/SweetFramebuffer.cpp iokit/Kernel/arm/SweetFramebuffer.cpp
---- a/iokit/Kernel/arm/SweetFramebuffer.cpp
-+++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -48,4 +48,5 @@
- extern "C" int sweet_console_muted;     /* osfmk/console/serial_console.c */
-+extern "C" void kprintf(const char *fmt, ...);
- #include <IOKit/IOTimerEventSource.h>
- #include <IOKit/system.h>
- #include <pexpert/pexpert.h>
-@@ -328,7 +329,7 @@
- sweet_fb_wait_frame_done(void)
- {
- 	if (sweet_fb_decon == 0) {
--		sweet_fb_decon = ml_io_map(0x12860000, 0x1000);
-+		sweet_fb_decon = ml_io_map(0x148B0000, 0x1000);
- 		if (sweet_fb_decon == 0) {
- 			return;
- 		}
-@@ -387,13 +388,16 @@
- 	if (!fConsolePaused) {
- 		int quiet = 0;
- 		fConsolePaused = true;
-+		kprintf("SWEET FB: AppleCLCD::present first frame phys=0x%llx %ux%u stride=%u\n",
-+		    (unsigned long long)fPhys, fWidth, fHeight, fRowBytes);
- #if defined(ARM64_BOARD_CONFIG_A5XELTE)
--		if (PE_parse_boot_argn("a5fb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) {
-+		if ((PE_parse_boot_argn("a5fb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) ||
-+		    (PE_parse_boot_argn("sweetfb_noconsole", &quiet, sizeof(quiet)) && quiet != 0)) {
- #else
- 		if (PE_parse_boot_argn("sweetfb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) {
- #endif
- 			/* Not PE_initialize_console(kPEDisableScreen): its console switch
- 			 * writes the read-only-late cons_ops_index and panics. */
- 			sweet_console_muted = 1;
- 		}
- 	}
-diff --git iokit/Kernel/arm/SweetCPU.cpp iokit/Kernel/arm/SweetCPU.cpp
---- a/iokit/Kernel/arm/SweetCPU.cpp
-+++ b/iokit/Kernel/arm/SweetCPU.cpp
-@@ -87,17 +87,10 @@ SweetCPU::start(IOService *provider)
- #if defined(A5XELTE)
- 	/* Linux's Exynos7580 DT: logical 0..3 = MPIDR 0..3;
- 	 * logical 4..7 = MPIDR 0x100..0x103. */
--#if defined(DREAMLTE)
--	/* Exynos 8895: logical 0..3 = A53 MPIDR 0x100..0x103 (boot cluster);
--	 * logical 4..7 = Mongoose M2 MPIDR 0..3. */
--	uint32_t expected_mpidr = cpu->cpu_id < 4 ? 0x100U + cpu->cpu_id :
--	    cpu->cpu_id - 4;
--#else
- 	uint32_t expected_mpidr = cpu->cpu_id < 4 ? cpu->cpu_id :
- 	    0x100U + cpu->cpu_id - 4;
--#endif
- 	if (cpu->phys_id != expected_mpidr ||
--	    topology->num_cpus > SWEET_SMP_MAX_CPUS) {
-+	    topology->num_cpus < 1 || topology->num_cpus > SWEET_SMP_MAX_CPUS) {
- 		panic(CPU_PORT_NAME " CPU: unsupported topology cpu=%u mpidr=0x%x count=%u",
- 		    cpu->cpu_id, cpu->phys_id, topology->num_cpus);
- 	}
-diff --git bsd/dev/a5xelte_touch.c bsd/dev/a5xelte_touch.c
---- a/bsd/dev/a5xelte_touch.c
-+++ b/bsd/dev/a5xelte_touch.c
-@@ -845,8 +845,10 @@
-     int *external, int *charging, int *full);
- int
- dreamlte_battery_read(unsigned *percent, unsigned *mv, int *ma,
-     int *external, int *charging, int *full)
- {
-+	(void)percent; (void)mv; (void)ma; (void)external; (void)charging; (void)full;
-+	return -1;
- 	uint16_t soc, vcell, cur;
- 	uint8_t reg, ok = 0, dtls = 0;
- 	if (!s8bat_i2c) {
-@@ -927,7 +929,8 @@
- a5xelte_touch_probe(void)
- {
- #if defined(DREAMLTE)
--	dreamlte_touch_start();   /* the A5 path below stays off */
-+	// dreamlte_touch_start();   /* the A5 path below stays off */
-+	(void)dreamlte_touch_start;
- #endif
- 	int enabled = A5_TOUCH_DEFAULT; /* A5 touch: off on the S8 */
- 	int log_contacts = 0;
