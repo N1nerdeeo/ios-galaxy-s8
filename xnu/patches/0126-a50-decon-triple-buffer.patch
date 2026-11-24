@@ -1,0 +1,213 @@
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 46e1a1c..475faed 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -125,6 +125,17 @@ public:
+ 	IOLock       *fPresentLock;   /* one panel copy at a time */
+ 	uint64_t      fLastPresent;   /* mach_absolute_time of the last copy */
+ 	uint64_t      fMinGap;        /* 1/hz in timebase ticks */
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	uint64_t      fBufPhys[3];
++	uintptr_t     fBufVirt[3];
++	IOMemoryDescriptor *fBufDesc[2];
++	IOMemoryMap  *fBufMap[2];
++	uint32_t      fBufCount;
++	uint32_t      fCurBuf;
++	vm_offset_t   fDeconBase;
++	vm_offset_t   fIdmaBase;
++	void          deconSetupBuffers(void);
++#endif
+ 
+ 	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
+ 	void addClient(IOMobileFramebufferUserClient *client);
+@@ -226,6 +237,9 @@ AppleCLCD::start(IOService *provider)
+ 	if (fPresentLock == NULL) {
+ 		return false;
+ 	}
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	deconSetupBuffers();
++#endif
+ 	fVsync->setTimeoutUS(SWEET_FB_VSYNC_US);
+ 
+ 	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
+@@ -263,12 +277,27 @@ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
+ 		}
+ 		IOLockUnlock(fb->fLock);
+ 		if (step <= 6) {
++			IOLockLock(fb->fPresentLock);
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++			uint32_t bufs = step == 6 ? fb->fBufCount : 1;
++			for (uint32_t b = 0; b < bufs; b++) {
++				uintptr_t base = step == 6 ? fb->fBufVirt[b] : fb->fPixels;
++				for (uint32_t y = 0; y < fb->fHeight; y++) {
++					volatile uint32_t *row = (volatile uint32_t *)(base + (uint64_t)y * fb->fRowBytes);
++					for (uint32_t x = 0; x < fb->fWidth; x++) {
++						row[x] = step < 6 ? (row[x] >> 1) & 0x7f7f7f7f : 0;
++					}
++				}
++			}
++#else
+ 			for (uint32_t y = 0; y < fb->fHeight; y++) {
+ 				volatile uint32_t *row = (volatile uint32_t *)(fb->fPixels + (uint64_t)y * fb->fRowBytes);
+ 				for (uint32_t x = 0; x < fb->fWidth; x++) {
+ 					row[x] = step < 6 ? (row[x] >> 1) & 0x7f7f7f7f : 0;
+ 				}
+ 			}
++#endif
++			IOLockUnlock(fb->fPresentLock);
+ 		}
+ 		sender->setTimeoutUS(SWEET_FB_VSYNC_US);
+ 		return;
+@@ -347,6 +376,93 @@ sweet_fb_wait_frame_done(void)
+ }
+ #endif
+ 
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++#define A5_DECON_PHYS           0x148B0000UL
++#define A5_DECON_SHADOW         0x060
++#define A5_DECON_SHADOW_GLOBAL  (1u << 31)
++#define A5_DECON_SHADOW_WINDOWS 0x3fu
++#define A5_IDMA_BASE_ADDR_Y     0x040
++#define A5_IDMA_ACTIVE          0x800
++#define A5_FB_BUF_STRIDE        0x00a00000ULL
++
++void
++AppleCLCD::deconSetupBuffers(void)
++{
++	fBufPhys[0] = fPhys;
++	fBufVirt[0] = fPixels;
++	fBufCount = 1;
++	fCurBuf = 0;
++
++	uint32_t reqBufs = 3;
++	PE_parse_boot_argn("sweetfb_bufs", &reqBufs, sizeof(reqBufs));
++	if (reqBufs <= 1 || (fPhys >> 32) != 0) {
++		IOLog("SWEET FB: single-buffer mode (sweetfb_bufs=%u)\n", reqBufs);
++		return;
++	}
++
++	static const uint32_t channels[] = { 0x14884000u, 0x14883000u, 0x14881000u, 0x14882000u };
++	for (size_t i = 0; i < sizeof(channels) / sizeof(channels[0]); i++) {
++		vm_offset_t idma = ml_io_map(channels[i], 0x1000);
++		if (idma != 0 && *(volatile uint32_t *)(idma + A5_IDMA_BASE_ADDR_Y) == (uint32_t)fPhys) {
++			fIdmaBase = idma;
++			IOLog("SWEET FB: matched DPP IDMA 0x%x for fb=0x%llx\n", channels[i], fPhys);
++			break;
++		}
++	}
++	if (fIdmaBase == 0) {
++		IOLog("SWEET FB: no DPP IDMA matches fb=0x%llx, keeping single buffer\n", fPhys);
++		return;
++	}
++
++	if (sweet_fb_decon == 0) {
++		sweet_fb_decon = ml_io_map(A5_DECON_PHYS, 0x1000);
++	}
++	fDeconBase = sweet_fb_decon;
++	if (fDeconBase == 0) {
++		IOLog("SWEET FB: DECON map failed, keeping single buffer\n");
++		return;
++	}
++
++	IOByteCount bufSize = (IOByteCount)round_page((vm_size_t)fRowBytes * fHeight);
++	size_t copyBytes = (size_t)fRowBytes * fHeight;
++	for (uint32_t i = 0; i < 2; i++) {
++		uint64_t phys = fPhys + (uint64_t)(i + 1) * A5_FB_BUF_STRIDE;
++		if ((phys >> 32) != 0) {
++			break;
++		}
++		IOMemoryDescriptor *md = IOMemoryDescriptor::withPhysicalAddress(
++		    (IOPhysicalAddress)phys, bufSize, kIODirectionInOut);
++		IOMemoryMap *map = md != NULL ? md->createMappingInTask(
++		    kernel_task, 0, kIOMapAnywhere | kIOMapWriteCombineCache) : NULL;
++		uintptr_t virt = map != NULL ? (uintptr_t)map->getVirtualAddress() : 0;
++		if (virt == 0) {
++			OSSafeReleaseNULL(map);
++			OSSafeReleaseNULL(md);
++			break;
++		}
++		fBufDesc[i] = md;
++		fBufMap[i] = map;
++		fBufPhys[i + 1] = phys;
++		fBufVirt[i + 1] = virt;
++		memcpy((void *)virt, (const void *)fBufVirt[0], copyBytes);
++	}
++
++	if (fBufVirt[1] != 0 && fBufVirt[2] != 0) {
++		fBufCount = 3;
++		IOLog("SWEET FB: DECON triple buffering enabled (0x%llx, 0x%llx, 0x%llx)\n",
++		    fBufPhys[0], fBufPhys[1], fBufPhys[2]);
++	} else {
++		for (uint32_t i = 0; i < 2; i++) {
++			OSSafeReleaseNULL(fBufMap[i]);
++			OSSafeReleaseNULL(fBufDesc[i]);
++			fBufPhys[i + 1] = 0;
++			fBufVirt[i + 1] = 0;
++		}
++		IOLog("SWEET FB: triple-buffer mapping failed, keeping single buffer\n");
++	}
++}
++#endif
++
+ static uint32_t sweet_fb_swaps_logged;
+ static uint64_t sweet_fb_swap_count;
+ 
+@@ -383,7 +499,24 @@ AppleCLCD::present(const uint8_t *rec)
+ {
+ 	uint32_t mask = get32(rec, 0x104);
+ 	IOLockLock(fPresentLock);
+-#if defined(DREAMLTE)
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	uint32_t targetBuf = 0;
++	bool drew = false;
++	if (fBufCount == 3) {
++		uint32_t active = *(volatile uint32_t *)(fIdmaBase + A5_IDMA_ACTIVE + A5_IDMA_BASE_ADDR_Y);
++		uint32_t requested = *(volatile uint32_t *)(fIdmaBase + A5_IDMA_BASE_ADDR_Y);
++		for (uint32_t i = 0; i < 3; i++) {
++			if ((uint32_t)fBufPhys[i] != active && (uint32_t)fBufPhys[i] != requested) {
++				targetBuf = i;
++				break;
++			}
++		}
++		fCurBuf = targetBuf;
++		fPixels = fBufVirt[targetBuf];
++	} else {
++		sweet_fb_wait_frame_done();
++	}
++#elif defined(DREAMLTE)
+ 	sweet_fb_wait_frame_done();
+ #endif
+ 
+@@ -424,7 +557,11 @@ AppleCLCD::present(const uint8_t *rec)
+ 			    s ? s->pixelFormat : 0, s ? s->bytesPerRow : 0, sx, sy, get32(a, 8),
+ 			    get32(a, 12), dx, dy, w, h);
+ 		}
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++		if (s == NULL || (s == fSurface && (fBufCount == 1 || targetBuf == 0))) {
++#else
+ 		if (s == NULL || s == fSurface) {
++#endif
+ 			OSSafeReleaseNULL(s);
+ 			continue;
+ 		}
+@@ -477,9 +614,20 @@ AppleCLCD::present(const uint8_t *rec)
+ 				    (const void *)(src + s->offset + (uint64_t)(sy + y) * s->bytesPerRow + (uint64_t)sx * 4),
+ 				    (size_t)w * 4);
+ 			}
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++			drew = true;
++#endif
+ 		}
+ 		s->release();
+ 	}
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	if (fBufCount == 3 && drew) {
++		__asm__ volatile("dsb sy" ::: "memory");
++		*(volatile uint32_t *)(fIdmaBase + A5_IDMA_BASE_ADDR_Y) = (uint32_t)fBufPhys[targetBuf];
++		*(volatile uint32_t *)(fDeconBase + A5_DECON_SHADOW) |=
++		    A5_DECON_SHADOW_WINDOWS | A5_DECON_SHADOW_GLOBAL;
++	}
++#endif
+ 	IOLockUnlock(fPresentLock);
+ }
+ 
