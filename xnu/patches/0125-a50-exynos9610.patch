@@ -554,6 +554,22 @@ index b1094e9..751cf79 100644
  #else
  	setProperty("SurfaceHeight", (unsigned long long)(151 << 16), 32);
  #endif
+diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
+index 6d56a33..7940af7 100644
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -1050,7 +1050,10 @@ ml_parse_cpu_topology(void)
+ 		 * on the value provided by EDT. Instead, use the MPIDR value to see if we have
+ 		 * seen this exact cluster before. If so, then reuse that cluster ID for this CPU.
+ 		 */
+-#if HAS_CLUSTER || defined(A5XELTE)
++#if defined(DREAMLTE)
++		/* Keep all CPUs in pset0 to avoid sched_clutch multi-pset lock panic. */
++		uint32_t phys_cluster_id = 0;
++#elif HAS_CLUSTER || defined(A5XELTE)
+ 		uint32_t phys_cluster_id = MPIDR_CLUSTER_ID(cpu->phys_id);
+ #else
+ 		uint32_t phys_cluster_id = (cpu->cluster_type == CLUSTER_TYPE_P);
 diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
 index 1966bdd..53fdc73 100644
 --- a/pexpert/arm/pe_serial.c
