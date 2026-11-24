@@ -34,7 +34,7 @@ index dcbd143..04d3dbe 100644
  typedef uint8_t keys_t;
  #define KEYS_SAMPLE() ((keys_t)a5_keys_read(A5_GPA2_DAT))
 diff --git a/bsd/dev/a5xelte_touch.c b/bsd/dev/a5xelte_touch.c
-index ba647a8..3166478 100644
+index ba647a8..0d02184 100644
 --- a/bsd/dev/a5xelte_touch.c
 +++ b/bsd/dev/a5xelte_touch.c
 @@ -851,6 +851,8 @@ int
@@ -46,7 +46,7 @@ index ba647a8..3166478 100644
  	uint16_t soc, vcell, cur;
  	uint8_t reg, ok = 0, dtls = 0;
  	if (!s8bat_i2c) {
-@@ -920,11 +922,325 @@ dreamlte_touch_start(void)
+@@ -920,11 +922,357 @@ dreamlte_touch_start(void)
  }
  #endif /* DREAMLTE */
  
@@ -73,7 +73,7 @@ index ba647a8..3166478 100644
 +static bool
 +a50_s3c_wait_irq(vm_offset_t i2c)
 +{
-+	for (unsigned n = 0; n < 20000; n++) {
++	for (unsigned n = 0; n < 50000; n++) {
 +		if (a5touch_read(i2c, 0x00) & 0x10u) {
 +			return true;
 +		}
@@ -108,6 +108,9 @@ index ba647a8..3166478 100644
 +		}
 +		delay(1);
 +	}
++	if (a5touch_read(i2c, 0x04) & 0x20u) {
++		a50_s3c_stop(i2c);
++	}
 +
 +	a5touch_write(i2c, 0x00, 0xe3u); /* ACK en, prescaler 3, IRQ en */
 +	a5touch_write(i2c, 0x10, 7u);    /* S3C2440 SDA delay */
@@ -134,6 +137,9 @@ index ba647a8..3166478 100644
 +	}
 +
 +	if (rlen) {
++		if (wlen) {
++			delay(50); /* 50 us pause between register address write and read */
++		}
 +		a5touch_write(i2c, 0x00, 0xe3u);
 +		a5touch_write(i2c, 0x04, 0x90u); /* Master Rx */
 +		a5touch_write(i2c, 0x0c, (uint32_t)(addr << 1) | 1u);
@@ -162,6 +168,22 @@ index ba647a8..3166478 100644
 +	return true;
 +}
 +
++static bool
++a50_s3c_xfer_retry(vm_offset_t i2c, uint8_t addr, const uint8_t *wbuf, unsigned wlen,
++    uint8_t *rbuf, unsigned rlen, unsigned retries)
++{
++	for (unsigned attempt = 0; attempt < retries; attempt++) {
++		if (attempt > 0) {
++			a50_s3c_stop(i2c);
++			delay(100);
++		}
++		if (a50_s3c_xfer(i2c, addr, wbuf, wlen, rbuf, rlen)) {
++			return true;
++		}
++	}
++	return false;
++}
++
 +static void
 +a50_ts_wait(unsigned ms)
 +{
@@ -188,10 +210,10 @@ index ba647a8..3166478 100644
 +			continue;
 +		}
 +
-+		/* Read packet info: 0x02, 0x10 */
++		/* Read packet info: 0x02, 0x10 with retry = 3 */
 +		uint8_t cmd_info[2] = { 0x02, 0x10 };
 +		uint8_t pkt_info = 0;
-+		if (!a50_s3c_xfer(a50_ts_i2c, A50_TOUCH_ADDR, cmd_info, 2, &pkt_info, 1)) {
++		if (!a50_s3c_xfer_retry(a50_ts_i2c, A50_TOUCH_ADDR, cmd_info, 2, &pkt_info, 1, 3)) {
 +			if (++errors <= 5 || !(errors & 255)) {
 +				printf("A50 TOUCH: read packet info failed (%u)\n", errors);
 +			}
@@ -199,25 +221,30 @@ index ba647a8..3166478 100644
 +			continue;
 +		}
 +
++		uint8_t category = (pkt_info >> 7) & 1u;
 +		uint8_t sz = pkt_info & 0x7fu;
-+		if (sz == 0) {
++		if (sz == 0 || sz > sizeof(buf)) {
 +			a50_ts_wait(4);
 +			continue;
 +		}
-+		if (sz > 120) {
-+			sz = 120;
-+		}
 +
-+		/* Read packet data: 0x02, 0x11 */
++		/* Read packet data: 0x02, 0x11 with retry = 3.
++		 * Reading PACKET_DATA is mandatory to drain MELFAS FIFO and release ATTN. */
 +		uint8_t cmd_data[2] = { 0x02, 0x11 };
-+		if (!a50_s3c_xfer(a50_ts_i2c, A50_TOUCH_ADDR, cmd_data, 2, buf, sz)) {
++		if (!a50_s3c_xfer_retry(a50_ts_i2c, A50_TOUCH_ADDR, cmd_data, 2, buf, sz, 3)) {
 +			if (++errors <= 5 || !(errors & 255)) {
-+				printf("A50 TOUCH: read packet data failed sz=%u (%u)\n", sz, errors);
++				printf("A50 TOUCH: read packet data failed sz=%u cat=%u (%u)\n",
++				    sz, category, errors);
 +			}
 +			a50_ts_wait(10);
 +			continue;
 +		}
 +		errors = 0;
++
++		/* If this was an Alert/ESD packet, FIFO is now drained. Discard payload. */
++		if (category != 0) {
++			continue;
++		}
 +
 +		/* Parse 12-byte event packets (EVENT_FORMAT_WITH_PRESSURE_2BYTE) */
 +		for (unsigned i = 0; i + 12 <= sz; i += 12) {
@@ -302,7 +329,7 @@ index ba647a8..3166478 100644
 +	/* 2. Configure tsp_ldo_en power rail (3.0V) in pinctrl_top:
 +	 * GPG3_CON (+0x120): pin 1 -> bits 4..7 = 0x1 (Output)
 +	 * GPG3_PUD (+0x128): pin 1 -> bits 2..3 = 0x0 (no pull)
-+	 * GPG3_DAT (+0x124): pin 1 -> bit 1 = 1 (HIGH)
++	 * GPG3_DAT (+0x124): pin 1
 +	 */
 +	uint32_t gpg3_con = a5touch_read(a50_ts_top, 0x120);
 +	gpg3_con = (gpg3_con & ~(0xfu << 4)) | (0x1u << 4);
@@ -312,8 +339,13 @@ index ba647a8..3166478 100644
 +	gpg3_pud &= ~(0x3u << 2);
 +	a5touch_write(a50_ts_top, 0x128, gpg3_pud);
 +
++	/* Clean power-cycle: drop tsp_ldo_en = 0, wait 30 ms, raise to 1, wait 150 ms POR */
 +	uint32_t gpg3_dat = a5touch_read(a50_ts_top, 0x124);
-+	gpg3_dat |= (1u << 1);
++	gpg3_dat &= ~(1u << 1);
++	a5touch_write(a50_ts_top, 0x124, gpg3_dat);
++	a50_ts_wait(30);
++
++	gpg3_dat = a5touch_read(a50_ts_top, 0x124) | (1u << 1);
 +	a5touch_write(a50_ts_top, 0x124, gpg3_dat);
 +
 +	/* 3. Configure ATTN pin GPA0_0 in pinctrl_alive:
@@ -328,8 +360,8 @@ index ba647a8..3166478 100644
 +	gpa0_pud &= ~0x3u;
 +	a5touch_write(a50_ts_alive, 0x028, gpa0_pud);
 +
-+	/* Wait 200 ms for MELFAS MSS100 power-on reset */
-+	a50_ts_wait(200);
++	/* Wait 150 ms for MELFAS MSS100 power-on reset */
++	a50_ts_wait(150);
 +
 +	/* Read back pin state for verification */
 +	uint32_t r_gpp1 = a5touch_read(a50_ts_top, 0x020);
@@ -338,15 +370,15 @@ index ba647a8..3166478 100644
 +	printf("A50 TOUCH: power on, GPP1_CON=0x%x GPG3_DAT=0x%x GPA0_DAT=0x%x\n",
 +	    r_gpp1, r_gpg3, r_gpa0);
 +
-+	/* Probe check: query MIP4 info (0x02, 0x10) or chip ID (0x01, 0x70) */
++	/* Probe check with retry: query MIP4 info (0x02, 0x10) or chip ID (0x01, 0x70) */
 +	uint8_t cmd_info[2] = { 0x02, 0x10 };
 +	uint8_t info_buf = 0;
-+	if (a50_s3c_xfer(a50_ts_i2c, A50_TOUCH_ADDR, cmd_info, 2, &info_buf, 1)) {
++	if (a50_s3c_xfer_retry(a50_ts_i2c, A50_TOUCH_ADDR, cmd_info, 2, &info_buf, 1, 3)) {
 +		printf("A50 TOUCH: MELFAS MSS100 ready (info 0x%02x)\n", info_buf);
 +	} else {
 +		uint8_t cmd_id[2] = { 0x01, 0x70 };
 +		uint8_t id_buf[4] = { 0 };
-+		if (a50_s3c_xfer(a50_ts_i2c, A50_TOUCH_ADDR, cmd_id, 2, id_buf, 2)) {
++		if (a50_s3c_xfer_retry(a50_ts_i2c, A50_TOUCH_ADDR, cmd_id, 2, id_buf, 2, 3)) {
 +			printf("A50 TOUCH: MELFAS MSS100 detected (id %02x %02x)\n",
 +			    id_buf[0], id_buf[1]);
 +		} else {
